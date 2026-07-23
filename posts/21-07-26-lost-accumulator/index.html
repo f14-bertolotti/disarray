@@ -47,13 +47,13 @@
             Lets focus on the maximum absolute error first (solid lines). For the gradient activations (first plot), the error grows large fairily early, hitting 100 before layer 20. In the final layer it grows past 250 in the final layer. Let's compare this full-precision residual stream (orange). We can see that the error grows jumps around layer 20 to ~25, and then plateus. In the last layer, the error decreases a bit. This is only the absolute error, the large majority of activations are in reality very small with extremely small errors. Now, let's have a look at the dashed lines, which show the number of sign flips. The full-precision residual stream (orange) has a fairly small number of sign flips when compared to the bfloat16 residual stream (blue) (we are speaking of ~600 less sign flips between the two).
             </p>
 
-            <img src="figs/hidden_state_error.svg" alt="Hidden state error" style="width: 100%;">
+            <img src="figs/hidden_state_error-light.svg" alt="Hidden state error" style="width: 100%;">
 
             <p>
             Now, let's see what happens on the gradients of the parameters. The maximum absolute error is much smaller as gradients in general are quite smaller. Yet, we can see clearly that the full-precision residual stream is often quite better. If we look at the number of sign flips, here the difference is far more stark. The full-precision residual stream has roughly 2x less sign flips than the bfloat16 baseline.
             </p>
 
-            <img src="figs/gradient_error.svg" alt="Gradient error" style="width: 100%;">
+            <img src="figs/gradient_error-light.svg" alt="Gradient error" style="width: 100%;">
             
             <p>
             These are a few piece of evidence that quantizing the residual stream does impact the training dynamics a bit. This does not mean that it is necessarily a problem, but I think that it points out to something that it is worth to investigate further.
@@ -160,7 +160,7 @@ def forward(self, hidden_states, attention_masks: , positions):
 
         <div id="footer"></div>
  
-        <script src="../../scripts/toggle-theme.js"></script>
+        <script src="toggle-theme.js"></script>
         <script src="../../scripts/load-header.js"></script>
         <script src="../../scripts/load-footer.js"></script>
         <script src="../../scripts/load-cits.js"></script>
