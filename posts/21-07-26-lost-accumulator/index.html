@@ -34,7 +34,7 @@
             </p>
 
             <p>
-                Also Shorter-horizon accumulators are often kept in float32. When using FSDP2 <span class="cite" value="Zhao23"></span>, each rank processes a different batch of data and therefore produces a different gradient. All these per-rank gradients need to be accumulated into a single gradient, as if the whole forward-backward pass had been performed with a much larger batch size. This is done with an all-reduce operation, which sums the gradients across ranks and distributes the result back to all of them. I honestly do not know what the "standard" precision for this all-reduce is, but TorchTitan <span class="cite" value="Liang24"></span> defaults to float32 here, which leads me to think it is probably the safer choice.
+                Shorter-horizon accumulators are also often kept in float32. When using FSDP2 <span class="cite" value="Zhao23"></span>, each rank processes a different batch of data and therefore produces a different gradient. All these per-rank gradients need to be accumulated into a single gradient, as if the whole forward-backward pass had been performed with a much larger batch size. This is done with an all-reduce operation, which sums the gradients across ranks and distributes the result back to all of them. I honestly do not know what the "standard" precision for this all-reduce is, but TorchTitan <span class="cite" value="Liang24"></span> defaults to float32 here, which leads me to think it is probably the safer choice.
             </p>
 
             <p>
@@ -83,7 +83,7 @@ def forward(self, hidden_states, attention_masks, positions):
             </code></pre>
 
             <p>
-            Here the activations flow through the block in whatever dtype they start in. Quantizing them to bfloat16 right before each layer is easy, it's just a matter of <code class="language-python">.to(torch.bfloat16)</code>. The same goes for casting the output back to full precision right before it gets folded into the residual stream:
+            Here the activations flow through the block in whatever dtype they start in. Quantizing them to bfloat16 right before each layer is easy: it's just a matter of <code class="language-python">.to(torch.bfloat16)</code>. The same goes for casting the output back to full precision right before it gets folded into the residual stream:
             </p>
 
             <pre><code class="language-python">
@@ -102,7 +102,7 @@ def forward(self, hidden_states, attention_masks, positions):
             </code></pre>
 
             <p>
-            I should mention that this code is only illustrative, the actual implementation also casts right after the input embedding layer and right before the output embedding layer, but otherwise this is exactly what I used. I'll call this the StreamBack block, since it casts the activations back to full precision before streaming them back into the residual stream.
+            I should mention that this code is only illustrative; the actual implementation also casts right after the input embedding layer and right before the output embedding layer, but otherwise this is exactly what I used. I'll call this the StreamBack block, since it casts the activations back to full precision before streaming them back into the residual stream.
             </p>
 
             <p>
@@ -116,7 +116,7 @@ def forward(self, hidden_states, attention_masks, positions):
             </ul>
 
             <p>
-            All three baselines were trained on 100B tokens from <a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb</a> <span class="cite" value="Penedo24"></span> with an effective batch size of 500K tokens.
+            All models were trained on 100B tokens from <a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb</a> <span class="cite" value="Penedo24"></span> with an effective batch size of 500K tokens.
             </p>
 
             <p>
@@ -128,12 +128,12 @@ def forward(self, hidden_states, attention_masks, positions):
             </p>
 
             <ul>
-                <li> Skinny-Tall-Baseline LLama 3 </li>
-                <li> Medium-Medium-Baseline LLama 3 </li>
-                <li> Fat-Short-Baseline LLama 3 </li>
-                <li> Skinny-Tall-Streamback LLama 3 </li>
-                <li> Medium-Medium-Streamback LLama 3 </li>
-                <li> Fat-Short-Streamback LLama 3 </li>
+                <li> Skinny-Tall-Baseline Llama 3 </li>
+                <li> Medium-Medium-Baseline Llama 3 </li>
+                <li> Fat-Short-Baseline Llama 3 </li>
+                <li> Skinny-Tall-StreamBack Llama 3 </li>
+                <li> Medium-Medium-StreamBack Llama 3 </li>
+                <li> Fat-Short-StreamBack Llama 3 </li>
             </ul>
 
         <h2> Results </h2>
@@ -145,7 +145,7 @@ def forward(self, hidden_states, attention_masks, positions):
         <img src="figs/eval-light.svg" alt="Gradient error" style="width: 100%;">
 
         <p>
-        Unfortunately, there is not much to see here, the two variants behave very similarly. The only real difference is on Winogrande <span class="cite" value="Sakaguchi19"></span>, where the StreamBack model performs noticeably better on the shortest variant. Apart from this one benchmark, which could well be a fluke, the two models track each other closely. Despite my expectation that the StreamBack model would come out a little ahead, this is actually good news: it means we can safely quantize the residual stream to bfloat16, at least at this scale, without any meaningful impact on downstream benchmark quality.
+        Unfortunately, there is not much to see here; the two variants behave very similarly. The only real difference is on Winogrande <span class="cite" value="Sakaguchi19"></span>, where the StreamBack model performs noticeably better on the fat-short variant. Apart from this one benchmark, which could well be a fluke, the two models track each other closely. Despite my expectation that the StreamBack model would come out a little ahead, this is actually good news: it means we can safely quantize the residual stream to bfloat16, at least at this scale, without any meaningful impact on downstream benchmark quality.
         </p>
 
         <p>
@@ -165,17 +165,85 @@ def forward(self, hidden_states, attention_masks, positions):
         <img src="figs/loss_difference-light.svg" alt="Gradient error" style="width: 100%;">
 
         <p>
-        Once again, both variants perform very similarly. The difference is always bounded between -0.001 and 0.001, essentially tracing each other. The training loss for the StreamBack model is a tiny bit consistently better than the baseline, but this doesn't show up in the validation loss at all. At the end of the day, this is one more piece of evidence that a bfloat16 residual stream is robust enough to avoid any training instabilities that matter for downstream performance.
+        Once again, both variants perform very similarly. The difference is always bounded between -0.001 and 0.001, essentially tracing each other. The training loss for the StreamBack model is consistently a tiny bit better than the baseline, but this doesn't show up in the validation loss at all. At the end of the day, this is one more piece of evidence that a bfloat16 residual stream is robust enough to avoid any training instabilities that matter for downstream performance.
         </p>
 
         <h1> A Note on Efficiency </h1>
 
         <p>
-        Keeping stream activations in float32 does amount to a substantial amount of memory to store. As a matter of fact, not too surprisingly, costs double wrt having it in bfloat16. If you are training LLMs, I am sure you've looked into ways to reduce the impact of activations, so this is definetely no good.
+        Keeping stream activations in float32 takes up a substantial amount of memory. As a matter of fact, and not too surprisingly, it costs double compared to keeping them in bfloat16. If you train LLMs, I am sure you've looked into ways to reduce the memory impact of activations, so this is definitely no good.
         </p>
 
         <p>
-        Yet, since we are talking of the residual stream, there are a few things we do. 
+        Luckily, the residual stream has a very convenient property: it is purely additive. A block never rewrites the stream, it only <em>adds</em> two contributions to it, the attention delta and the feed-forward delta. If I have the block hand these deltas back explicitly, the structure becomes obvious:
+        </p>
+
+        <pre><code class="language-python">
+def forward(self, hidden_states, attention_masks, positions=None):
+    hidden_states = hidden_states + (delta0 := self.attention(
+        self.attention_norm(hidden_states).to(torch.bfloat16),
+        attention_masks,
+        positions
+    ))
+
+    hidden_states = hidden_states + (delta1 := self.feed_forward(
+        self.ffn_norm(hidden_states).to(torch.bfloat16)
+    ))
+
+    return hidden_states, delta0, delta1
+        </code></pre>
+
+        <p>
+        So a layer is just h<sub>i+1</sub> = h<sub>i</sub> + &Delta;0<sub>i</sub> + &Delta;1<sub>i</sub>. And if a layer only adds to the stream, then we can walk it backwards just as easily by subtracting: h<sub>i</sub> = h<sub>i+1</sub> &minus; &Delta;0<sub>i</sub> &minus; &Delta;1<sub>i</sub>. This means we do not actually need to keep every intermediate residual around for the backward pass. If we hold on to the last residual h<sub>N</sub> and to the per-layer deltas, we can reconstruct every earlier h<sub>i</sub> on the fly, one subtraction at a time.
+        </p>
+
+        <img src="figs/reverse-stream-light.svg" alt="Reconstructing the residual stream by subtracting layer deltas" style="width: 100%;">
+
+        <p>
+        The deltas are the bfloat16 outputs of the sublayers, and the only genuinely full-precision tensor we must stash is the final residual h<sub>N</sub>, the seed of the reconstruction chain. Every intermediate residual is thrown away on the forward pass and rebuilt on the way back.
+        </p>
+
+        <p>
+        Concretely, during the forward pass I register a pointer to each residual and cache the deltas, all inside a <code class="language-python">saved_tensors_hooks</code> context:
+        </p>
+
+        <pre><code class="language-python">
+with torch.autograd.graph.saved_tensors_hooks(stream.pack, stream.unpack):
+    h = self.tok_embeddings(tokens).float()
+    for i, layer in enumerate(self.layers.values()):
+        stream.append(residual=get_pointer(h), layer=i)
+        h, delta0, delta1 = layer(h, attention_masks, positions)
+        stream.append(delta0=delta0, delta1=delta1)
+    stream.append(residual=h)  # seed reconstruction chain with float32 h_N
+        </code></pre>
+
+        <p>
+        The interesting part is <code class="language-python">pack</code>/<code class="language-python">unpack</code>. When autograd is about to save a full-precision residual for the backward pass, <code class="language-python">pack</code> recognizes it (a float32 tensor whose storage pointer we registered) and stores a cheap integer pointer instead, letting the actual fp32 storage be freed. On the way back, <code class="language-python">unpack</code> sees that integer and calls <code class="language-python">pop</code>, which rebuilds the residual by subtracting the deltas from the one it just reconstructed:
+        </p>
+
+        <pre><code class="language-python">
+def pack(self, x):
+    if x.dtype == torch.float32 and get_pointer(x) in self:
+        return get_pointer(x)          # store a pointer, free the fp32 tensor
+    return x
+
+def unpack(self, x):
+    if isinstance(x, int):
+        return self.pop()              # rebuild the residual on the backward pass
+    return x
+
+@torch.no_grad()
+def pop(self):
+    residual = self.residual_stream.pop()
+    delta0 = self.delta0s.pop()
+    delta1 = self.delta1s.pop()
+    self.layers.pop()
+    self.residual_stream[-1] = residual - delta0 - delta1   # h_i = h_{i+1} - d0 - d1
+    return self.residual_stream[-1].requires_grad_(True)
+        </code></pre>
+
+        <p>
+        It is worth being honest about what this actually buys us. Saving the stream in float32 or saving the deltas in bfloat16 amounts to the same memory: one fp32 residual per layer costs exactly as much as its two bf16 deltas (the story only changes for precisions lower than bfloat16, where the deltas get cheaper). What you do get on top is that the saved activations are now distributed across the block, so recomputation for activation checkpointing has intermediate points to start from. That said, all of this does not sit too well with <code class="language-python">torch.compile</code>, so I have not seen much of a performance gain in practice.
         </p>
 
         <h1> Future Work </h1>
