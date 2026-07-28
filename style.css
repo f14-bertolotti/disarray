@@ -137,6 +137,12 @@ p {
     font-size: var(--text-font-size);
 }
 
+strong {
+    color: var(--text-color);
+    font-size: var(--text-font-size);
+    font-weight: 700;
+}
+
 ul {
     color: var(--text-color);
     text-align: justify;

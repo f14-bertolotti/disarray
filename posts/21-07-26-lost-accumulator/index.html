@@ -108,9 +108,9 @@ def forward(self, hidden_states, attention_masks: , positions):
             </p>
 
             <ul>
-                <li> <strong>Skinny-Tall Llama 3</strong>: 80 layers, 1024 hidden dimension, 16 attention heads, 4 KV heads. </li>
-                <li> <strong>Medium-Medium Llama 3</strong>: 40 layers, 1512 hidden dimension, 16 attention heads, 4 KV heads. </li>
-                <li> <strong>Fat-Short Llama 3</strong>: 20 layers, 2048 hidden dimension, 16 attention heads, 4 KV heads. </li>
+                <li> Skinny-Tall Llama 3: 80 layers, 1024 hidden dimension, 16 attention heads, 4 KV heads. </li>
+                <li> Medium-Medium Llama 3: 40 layers, 1512 hidden dimension, 16 attention heads, 4 KV heads. </li>
+                <li> Fat-Short Llama 3: 20 layers, 2048 hidden dimension, 16 attention heads, 4 KV heads. </li>
             </ul>
 
             <p>
@@ -126,12 +126,12 @@ def forward(self, hidden_states, attention_masks: , positions):
             </p>
 
             <ul>
-                <li> <strong>Skinny-Tall-Baseline LLama 3</strong> </li>
-                <li> <strong>Medium-Medium-Baseline LLama 3</strong> </li>
-                <li> <strong>Fat-Short-Baseline LLama 3</strong> </li>
-                <li> <strong>Skinny-Tall-Streamback LLama 3</strong> </li>
-                <li> <strong>Medium-Medium-Streamback LLama 3</strong> </li>
-                <li> <strong>Fat-Short-Streamback LLama 3</strong> </li>
+                <li> Skinny-Tall-Baseline LLama 3 </li>
+                <li> Medium-Medium-Baseline LLama 3 </li>
+                <li> Fat-Short-Baseline LLama 3 </li>
+                <li> Skinny-Tall-Streamback LLama 3 </li>
+                <li> Medium-Medium-Streamback LLama 3 </li>
+                <li> Fat-Short-Streamback LLama 3 </li>
             </ul>
 
         <h2> Results </h2>
@@ -158,16 +158,28 @@ def forward(self, hidden_states, attention_masks: , positions):
         Once again, this is not the case. Both variants for the fat-short model and medium-medium model have very similar reach. Interestingly, they start very large, and then they decrease quite a bit. Still, the reach remains quite large +500 and -500. The skinny-tall model is the outlier here because something very interesting is happening. The baseline variant behaves very similarly to any other model, however, the streamback variant has a strange behavior. It starts with large reach, the positive side behaves consistently with other models, but the negative side collapses to a very small reach. I do not know if this is something that is caused by having a full-precision stream or if it is again just a fluke from the training.
         </p>
 
+        <p>
+        Let's also have a look at the loss difference between the two variants. Here, I am plotting the difference between the baseline and streamback loss. A positive value means that the streamback variant is performing better, a negative value means that the baseline variant is performing better. On top, we have the training loss, on the bottom we have the validation loss.
+        </p>
+
         <img src="figs/loss_difference-light.svg" alt="Gradient error" style="width: 100%;">
 
+        <p>
+        Once again, we see that both variants perform very similarly. The difference is always bounded between -0.001 and 0.001, they practically trace each other. Notably, the training loss for a streamback model is a tiny small bit consistently better than the baseline model, but this is definetely not reflected in the validation loss. At the end of day, this is one more piece of evidence bfloat156 residual stream is robust enough to not cause any significant training instabilities.
+        </p>
+
         <h1> Future Work </h1>
+
+        <p>
+        This is kind of negative results, but there's a lot of ways I think it could be extended to get more insights. Unfortunately, I either lack the hardware or the time to test these ideas. Here's a few possible follow-ups:
+        </p>
 
         <p>
         Unfortunately, I do not have the hardware for running more aggressive quantization. However, it would be interesting a comparison against more aggressive quantized data types such as MXFP8 or NVFP4 (TODO check names). We have seen that bfloat16 residual stream is more then enough to not suffer from training instabilities, at least none that matter for downstream performance. However, we may see an improvement when comparing to more aggressive quantization.
         </p>
 
         <p>
-        Longer token horizons.
+        Increasing the token horizon would increase the number of accumulations in the residual stream. This may be a good way to stress test the residual stream and see if it is robust enough to handle longer horizons.
         </p>
 
 

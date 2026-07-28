@@ -2,7 +2,7 @@ code[class*=language-],pre[class*=language-]{
     color:var(--code-text-color);
     background:var(--background-color);
     font-family:Consolas,Monaco,'Andale Mono','Ubuntu Mono',monospace;
-    font-size:14px;
+    font-size:10px;
     text-align:left;
     white-space:pre;
     word-spacing:normal;
