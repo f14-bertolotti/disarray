@@ -141,13 +141,33 @@ def forward(self, hidden_states, attention_masks: , positions):
         </p>
         
 
-        <img src="figs/baseline-vs-streamback-light.svg" alt="Gradient error" style="width: 100%;">
+        <img src="figs/eval-light.svg" alt="Gradient error" style="width: 100%;">
 
+        <p>
+        Unfortunately, there is not much to see here. The two behaves very similarly. The only difference is winogrande, where the streamback model performs quite better on the short model. However, apart from this benchmark which may be a fluke, otherwise the two models are very similar. Despite me expecting that the streamback model would have been slighly better, this is really good news. It means that we can pretty much safely quantize the residual stream (at least to bfloat16) without any significant impact on the benchmark quality. 
+        </p>
+
+        <p>
+        The next thing I expected to see is a residual stream with lower envelope (lower maximums and higher minimums). This is because a full-precision stream would be able to accumulate the small contributions of each layer, even when they happen to be accumualted on large activations. With a bfloat16 stream this contribution would be quantized to zero on large activations impacting gradients. Let's see if this is the case:
+        </p>
+
+
+        <img src="figs/spread-light.svg" alt="Gradient error" style="width: 100%;">
+
+        <p>
+        Once again, this is not the case. Both variants for the fat-short model and medium-medium model have very similar reach. Interestingly, they start very large, and then they decrease quite a bit. Still, the reach remains quite large +500 and -500. The skinny-tall model is the outlier here because something very interesting is happening. The baseline variant behaves very similarly to any other model, however, the streamback variant has a strange behavior. It starts with large reach, the positive side behaves consistently with other models, but the negative side collapses to a very small reach. I do not know if this is something that is caused by having a full-precision stream or if it is again just a fluke from the training.
+        </p>
+
+        <img src="figs/loss_difference-light.svg" alt="Gradient error" style="width: 100%;">
 
         <h1> Future Work </h1>
 
         <p>
         Unfortunately, I do not have the hardware for running more aggressive quantization. However, it would be interesting a comparison against more aggressive quantized data types such as MXFP8 or NVFP4 (TODO check names). We have seen that bfloat16 residual stream is more then enough to not suffer from training instabilities, at least none that matter for downstream performance. However, we may see an improvement when comparing to more aggressive quantization.
+        </p>
+
+        <p>
+        Longer token horizons.
         </p>
 
 
