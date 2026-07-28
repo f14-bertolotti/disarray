@@ -1,7 +1,7 @@
 code[class*=language-],pre[class*=language-]{
     color:var(--code-text-color);
     background:var(--background-color);
-    font-family:Consolas,Monaco,'Andale Mono','Ubuntu Mono',monospace;
+    font-family:'Roboto Mono',Consolas,Monaco,'Andale Mono','Ubuntu Mono',monospace;
     font-size:10px;
     text-align:left;
     white-space:pre;
@@ -32,7 +32,8 @@ pre[class*=language-]{
     background:var(--background-color);
 }
 :not(pre)>code[class*=language-]{
-    white-space:normal
+    white-space:normal;
+    font-size:var(--text-font-size)
 }
 .token.cdata,.token.comment,.token.doctype,.token.prolog{
     color:var(--code-comment-color)

@@ -7,7 +7,7 @@
         <link rel="stylesheet" href="../../style.css">
         <link rel="stylesheet" href="../../post.css">
         <link rel="stylesheet" href="../../code.css">
-        <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Roboto&family=Roboto+Mono&display=swap" rel="stylesheet">
 
         <title>Disarray</title>
 
@@ -23,50 +23,52 @@
 
             <h1>The Lost Accumulator</h1>
 
+            <h2> Motivation </h2>
+
             <p>
-                Accumulators are one of the most sensible components to quantization. If we repeat additions over and over, we can expect errors to accumulate and grow. This is even more concerning when the value being accumulated falls outside a the sensible range of the precision type. For example, in bfloat16, past the value 32, there are only 4 numbers that can be represented for each integer. 32, 32.25, 32.5, and 32.75. Any value that falls between these will be rounded.
+                Accumulators are one of the components most sensitive to quantization. If we repeat additions over and over, we can expect errors to accumulate and grow. This is even more concerning when the accumulated value falls outside the range where the precision format is dense. For example, in bfloat16 <span class="cite" value="Kalamkar19"></span>, past the value 32 the representable grid becomes coarser: within each unit interval there are only 4 representable values: 32, 32.25, 32.5, and 32.75. Any value that falls in between gets rounded to the closest one.
             </p>
 
             <p>
-                In a normal LLM training, there are many accumulators. The most notable one are the weights of the model themeselves. Each training step, these accumulate a new gradient value. The same goes for the optimizer state which accumulates moments. Both of these are usually stored in full-precision, they get quantized on the fly for the forward pass. This of course are accumulators that runs for hundred of thousands of steps, rightfully so, they are stored in full precision.
+                In a typical LLM training run there are many accumulators. The most notable ones are the weights of the model themselves: at each training step they accumulate a new gradient contribution. The same holds for the optimizer state, which accumulates the moments of the gradient. Both of these are usually kept in full precision and only quantized on the fly for the forward pass. These accumulators run for hundreds of thousands of steps, so it makes sense that they are kept in full precision.
             </p>
 
             <p>
-                Also shorter-horizon accumulators are kept in bfloat16. When using FSDP2, each rank gets a batch of data that will produce a gradient different from all other ranks. All these gradients needs to be accumulated into a single gradient (like if we performed the whole forward-backward with a far larger batch-size). This is done by performing an all-reduce operation, which sums all the gradients and distributes the result to all ranks. I actually, do not know what the "standard" here, however, I can tell you that TorchTitan defaults to float32 here which leds me to think that it may a good choice.
+                Also Shorter-horizon accumulators are often kept in float32. When using FSDP2 <span class="cite" value="Zhao23"></span>, each rank processes a different batch of data and therefore produces a different gradient. All these per-rank gradients need to be accumulated into a single gradient, as if the whole forward-backward pass had been performed with a much larger batch size. This is done with an all-reduce operation, which sums the gradients across ranks and distributes the result back to all of them. I honestly do not know what the "standard" precision for this all-reduce is, but TorchTitan <span class="cite" value="Liang24"></span> defaults to float32 here, which leads me to think it is probably the safer choice.
             </p>
 
             <p>
-                However, there is an accumulator that is not usually stored in full-precision---the residual stream. The residual stream accumulates the contribution of each inner attention layer and feed forward layer. On very large models with 70 or more layers, this amounts to 140 accumulations. Accumulations that may be performed in bfloat16 in the most common cases or even in float8 or nvfp4 in the more extreme cases. This accumulator is also used for gradient propagation, so it is fair to think that it may have important implications for training.
+                However, there is one accumulator that is not usually stored in full precision: the residual stream <span class="cite" value="Elhage21"></span>. The residual stream accumulates the contribution of every attention layer and every feed-forward layer as information flows through the network. On very large models with 70 or more layers, this amounts to 140 accumulations, and these may happen in bfloat16 in the common case, or even in float8 <span class="cite" value="Micikevicius22"></span> or NVFP4 <span class="cite" value="Nvidia25"></span> in more extreme cases. The residual stream is also the path along which gradients propagate backward, so it is fair to expect it might have a meaningful impact on training.
             </p>
 
             <p>
-            Let's start by get a sense of what it does mean to have a bfloat16 residual stream compared to a full-precision one (this is baguettotron btw). The following two figures I tracked two metrics across layers: 1) the maximum absolute error (solid), and 2) the number of sign flips (dashed). Here, the ground truth is a full-precision model, that is compared to a bfloat16 model with (orange) or without a full-precision residual stream (blue)..
+            Let's start by getting a sense of what it means to have a bfloat16 residual stream compared to a full-precision one (this is <a href="https://huggingface.co/PleIAs/Baguettotron">Baguettotron</a>, by the way). In the following two figures I tracked two metrics across layers: 1) the maximum absolute error (left), and 2) the number of sign flips (right). Here, the ground truth is a full-precision model, compared against a bfloat16 model with (orange) or without (blue) a full-precision residual stream.
             </p>
 
             <p>
-            Lets focus on the maximum absolute error first (solid lines). For the gradient activations (first plot), the error grows large fairily early, hitting 100 before layer 20. In the final layer it grows past 250 in the final layer. Let's compare this full-precision residual stream (orange). We can see that the error grows jumps around layer 20 to ~25, and then plateus. In the last layer, the error decreases a bit. This is only the absolute error, the large majority of activations are in reality very small with extremely small errors. Now, let's have a look at the dashed lines, which show the number of sign flips. The full-precision residual stream (orange) has a fairly small number of sign flips when compared to the bfloat16 residual stream (blue) (we are speaking of ~600 less sign flips between the two).
+            Let's focus on the stream's activations (left). For both models, as one would expect, the error grows with depth. However, the fp32 stream's error remains much smaller when compared to the bf16 stream. The same goes if one compares the number of sign flips (right). 
             </p>
 
             <img src="figs/hidden_state_error-light.svg" alt="Hidden state error" style="width: 100%;">
 
             <p>
-            Now, let's see what happens on the gradients of the parameters. The maximum absolute error is much smaller as gradients in general are quite smaller. Yet, we can see clearly that the full-precision residual stream is often quite better. If we look at the number of sign flips, here the difference is far more stark. The full-precision residual stream has roughly 2x less sign flips than the bfloat16 baseline.
+            Now let's look at what happens to the gradients of the parameters. The maximum absolute error is much smaller here, since gradients are generally smaller in magnitude. Still, the full-precision residual stream is consistently a bit better. If we look at the number of sign flips instead, the difference is far more stark: the full-precision residual stream has roughly half as many sign flips as the bfloat16 baseline.
             </p>
 
             <img src="figs/gradient_error-light.svg" alt="Gradient error" style="width: 100%;">
-            
+
             <p>
-            These are a few piece of evidence that quantizing the residual stream does impact the training dynamics a bit. This does not mean that it is necessarily a problem, but I think that it points out to something that it is worth to investigate further.
+            This is a bit of evidence that quantizing the residual stream does affect training dynamics somewhat. That doesn't necessarily mean it is a problem, but it does seem worth investigating further.
             </p>
 
             <h1> Found Accumulator </h1>
 
             <p>
-            If quantizing the residual stream in bfloat16 is a problem, then we can design a few simple experiments to test this hypothesis. Let's start from a reference transformer block (llama3):
+            If quantizing the residual stream to bfloat16 is a problem, then we can design a simple experiment to test this hypothesis. Let's start from a reference transformer block (Llama 3 <span class="cite" value="Grattafiori24"></span>):
             </p>
 
             <pre><code class="language-python">
-def forward(self, hidden_states, attention_masks: , positions):
+def forward(self, hidden_states, attention_masks, positions):
     hidden_states = hidden_states + self.attention(
         self.attention_norm(hidden_states),
         attention_masks,
@@ -81,11 +83,11 @@ def forward(self, hidden_states, attention_masks: , positions):
             </code></pre>
 
             <p>
-            Here the activations flow with the same dtype in which they start. Quantizing them before we feed them to each layer is pretty easy, is it just matter of <code class="language-python">.to(torch.bfloat16</code> The same goes to cast the activation back to full precision just before they get integrated in the residual stream:
+            Here the activations flow through the block in whatever dtype they start in. Quantizing them to bfloat16 right before each layer is easy, it's just a matter of <code class="language-python">.to(torch.bfloat16)</code>. The same goes for casting the output back to full precision right before it gets folded into the residual stream:
             </p>
 
             <pre><code class="language-python">
-def forward(self, hidden_states, attention_masks: , positions):
+def forward(self, hidden_states, attention_masks, positions):
     hidden_states = hidden_states + self.attention(
         self.attention_norm(hidden_states).to(torch.bfloat16),
         attention_masks,
@@ -100,11 +102,11 @@ def forward(self, hidden_states, attention_masks: , positions):
             </code></pre>
 
             <p>
-            I need to tell you that this code is just illustrative, the actual code involves a cast just after the input embedding layer and a cast just before the output embedding layer. But apart from that this is what I used.
+            I should mention that this code is only illustrative, the actual implementation also casts right after the input embedding layer and right before the output embedding layer, but otherwise this is exactly what I used. I'll call this the StreamBack block, since it casts the activations back to full precision before streaming them back into the residual stream.
             </p>
-            
+
             <p>
-            I imagined that the StreamBack block would be more stable than the baseline architecture in general, especially for deeper models. To test this, I designed three Llama 3 1B variants with different depth/width trade-offs:
+            I expected the StreamBack block to be more stable than the baseline architecture in general, and especially so for deeper models, where the residual stream accumulates many more contributions. To test this, I designed three Llama 3 1B variants with different depth/width trade-offs:
             </p>
 
             <ul>
@@ -114,15 +116,15 @@ def forward(self, hidden_states, attention_masks: , positions):
             </ul>
 
             <p>
-            All three baselines were trained on 100B tokens from FineWeb with an effective batch size of 500K tokens.
+            All three baselines were trained on 100B tokens from <a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb</a> <span class="cite" value="Penedo24"></span> with an effective batch size of 500K tokens.
             </p>
 
             <p>
-            To keep the comparison simple, I used a standard training recipe: AdamW with a weight decay of 0.1 and a learning rate of 4e-4. The learning rate schedule follows WSD, with 2,500 warmup steps followed by 2,500 steps of cosine decay to zero.
+            To keep the comparison simple, I used a standard training recipe: AdamW <span class="cite" value="Loshchilov19"></span> with a weight decay of 0.1 and a learning rate of 4e-4. The learning rate schedule follows WSD <span class="cite" value="Hu24"></span>, with 2,500 warmup steps followed by 2,500 steps of cosine decay to zero.
             </p>
 
             <p>
-            Overall, we've got 6 model to train: for each llama3 variant, we will train with a streamback block and baseline block:
+            Overall, this gives 6 models to train: for each Llama 3 variant, one with the baseline block and one with the StreamBack block:
             </p>
 
             <ul>
@@ -137,55 +139,64 @@ def forward(self, hidden_states, attention_masks: , positions):
         <h2> Results </h2>
 
         <p>
-        Let's keep this blog short and jump right away to the results
+        Let's keep this post short and jump right to the results.
         </p>
-        
 
         <img src="figs/eval-light.svg" alt="Gradient error" style="width: 100%;">
 
         <p>
-        Unfortunately, there is not much to see here. The two behaves very similarly. The only difference is winogrande, where the streamback model performs quite better on the short model. However, apart from this benchmark which may be a fluke, otherwise the two models are very similar. Despite me expecting that the streamback model would have been slighly better, this is really good news. It means that we can pretty much safely quantize the residual stream (at least to bfloat16) without any significant impact on the benchmark quality. 
+        Unfortunately, there is not much to see here, the two variants behave very similarly. The only real difference is on Winogrande <span class="cite" value="Sakaguchi19"></span>, where the StreamBack model performs noticeably better on the shortest variant. Apart from this one benchmark, which could well be a fluke, the two models track each other closely. Despite my expectation that the StreamBack model would come out a little ahead, this is actually good news: it means we can safely quantize the residual stream to bfloat16, at least at this scale, without any meaningful impact on downstream benchmark quality.
         </p>
 
         <p>
-        The next thing I expected to see is a residual stream with lower envelope (lower maximums and higher minimums). This is because a full-precision stream would be able to accumulate the small contributions of each layer, even when they happen to be accumualted on large activations. With a bfloat16 stream this contribution would be quantized to zero on large activations impacting gradients. Let's see if this is the case:
+        The next thing I expected to see is a residual stream with a different envelope (maximums and minimums). This is because a full-precision stream would be able to accumulate the small contribution of each layer, even when that contribution lands on top of a large activation. With a bfloat16 stream, this contribution would be quantized to zero on large activations, impacting gradients. Let's see if this is the case:
         </p>
-
 
         <img src="figs/spread-light.svg" alt="Gradient error" style="width: 100%;">
 
         <p>
-        Once again, this is not the case. Both variants for the fat-short model and medium-medium model have very similar reach. Interestingly, they start very large, and then they decrease quite a bit. Still, the reach remains quite large +500 and -500. The skinny-tall model is the outlier here because something very interesting is happening. The baseline variant behaves very similarly to any other model, however, the streamback variant has a strange behavior. It starts with large reach, the positive side behaves consistently with other models, but the negative side collapses to a very small reach. I do not know if this is something that is caused by having a full-precision stream or if it is again just a fluke from the training.
+        Once again, this is not the case. Both the fat-short and medium-medium variants have very similar reach. Interestingly, they start very large and then decrease quite a bit, though the reach remains fairly large at +500 and -500. The skinny-tall model is the outlier here, because something interesting is happening: the baseline variant behaves consistently with the other models, but the StreamBack variant does something odd. It starts with a large reach, the positive side is consistent with the other models, but the negative side collapses to a much smaller reach. I don't know whether this is caused by having a full-precision residual stream, or if it is just noise from training.
         </p>
 
         <p>
-        Let's also have a look at the loss difference between the two variants. Here, I am plotting the difference between the baseline and streamback loss. A positive value means that the streamback variant is performing better, a negative value means that the baseline variant is performing better. On top, we have the training loss, on the bottom we have the validation loss.
+        Let's also look at the loss difference between the two variants. Here I am plotting the difference between the baseline and StreamBack loss. A positive value means the StreamBack variant is performing better, a negative value means the baseline variant is performing better. On top we have the training loss, on the bottom the validation loss.
         </p>
 
         <img src="figs/loss_difference-light.svg" alt="Gradient error" style="width: 100%;">
 
         <p>
-        Once again, we see that both variants perform very similarly. The difference is always bounded between -0.001 and 0.001, they practically trace each other. Notably, the training loss for a streamback model is a tiny small bit consistently better than the baseline model, but this is definetely not reflected in the validation loss. At the end of day, this is one more piece of evidence bfloat156 residual stream is robust enough to not cause any significant training instabilities.
+        Once again, both variants perform very similarly. The difference is always bounded between -0.001 and 0.001, essentially tracing each other. The training loss for the StreamBack model is a tiny bit consistently better than the baseline, but this doesn't show up in the validation loss at all. At the end of the day, this is one more piece of evidence that a bfloat16 residual stream is robust enough to avoid any training instabilities that matter for downstream performance.
+        </p>
+
+        <h1> A Note on Efficiency </h1>
+
+        <p>
+        Keeping stream activations in float32 does amount to a substantial amount of memory to store. As a matter of fact, not too surprisingly, costs double wrt having it in bfloat16. If you are training LLMs, I am sure you've looked into ways to reduce the impact of activations, so this is definetely no good.
+        </p>
+
+        <p>
+        Yet, since we are talking of the residual stream, there are a few things we do. 
         </p>
 
         <h1> Future Work </h1>
 
         <p>
-        This is kind of negative results, but there's a lot of ways I think it could be extended to get more insights. Unfortunately, I either lack the hardware or the time to test these ideas. Here's a few possible follow-ups:
+        These are somewhat negative results, but there are a few ways I think this could be extended to get more insight. Unfortunately, I currently lack either the hardware or the time to test these ideas myself, so here are a couple of possible follow-ups:
         </p>
 
         <p>
-        Unfortunately, I do not have the hardware for running more aggressive quantization. However, it would be interesting a comparison against more aggressive quantized data types such as MXFP8 or NVFP4 (TODO check names). We have seen that bfloat16 residual stream is more then enough to not suffer from training instabilities, at least none that matter for downstream performance. However, we may see an improvement when comparing to more aggressive quantization.
+        It would be interesting to compare against more aggressive formats such as MXFP8 or NVFP4. We've seen that a bfloat16 residual stream is more than robust enough to avoid training instabilities that matter for downstream performance, but there might still be a measurable gap once we push to these more extreme formats.
         </p>
 
         <p>
-        Increasing the token horizon would increase the number of accumulations in the residual stream. This may be a good way to stress test the residual stream and see if it is robust enough to handle longer horizons.
+        Increasing the token horizon would increase the number of accumulations flowing through the residual stream. This could be a good way to stress-test it further, and see whether it remains robust over longer training runs.
         </p>
-
-
-
 
         </div>
+
+        <br>
+
+        <div class="bibtex" year="2026" month="July"></div>
 
         <br>
 
