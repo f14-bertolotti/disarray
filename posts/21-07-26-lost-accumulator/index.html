@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="../../style.css">
+        <link rel="stylesheet" href="../../post.css">
+        <link rel="stylesheet" href="../../code.css">
+        <link href="https://fonts.googleapis.com/css2?family=Roboto&family=Roboto+Mono&display=swap" rel="stylesheet">
+
+        <title>Disarray</title>
+
+    </head>
+    
+    <body>
+
+        <div id="root-folder" value="../../"></div>
+
+        <div id="header"></div>
+
+        <div class="post-body">
+
+            <h1>The Lost Accumulator</h1>
+
+            <div id="canvas-container-dots" width=700 height=100></div>
+
+            <h2> Motivation </h2>
+
+            <p>
+                Accumulators are one of the components most sensitive to quantization. If we repeat additions over and over, we can expect errors to accumulate and grow. This is even more concerning when the accumulated value falls outside the range where the precision format is dense. For example, in bfloat16 <span class="cite" value="Kalamkar19"></span>, past the value 32 the representable grid becomes coarser: within each unit interval there are only 4 representable values: 32, 32.25, 32.5, and 32.75. Any value that falls in between gets rounded to the closest one.
+            </p>
+
+            <p>
+                In a typical LLM training run there are many accumulators. The most notable ones are the weights of the model themselves: at each training step they accumulate a new gradient contribution. The same holds for the optimizer state, which accumulates the moments of the gradient. Both of these are usually kept in full precision and only quantized on the fly for the forward pass. These accumulators run for hundreds of thousands of steps, so it makes sense that they are kept in full precision.
+            </p>
+
+            <p>
+                Shorter-horizon accumulators are also often kept in float32. When using FSDP2 <span class="cite" value="Zhao23"></span>, each rank processes a different batch of data and therefore produces a different gradient. All these per-rank gradients need to be accumulated into a single gradient, as if the whole forward-backward pass had been performed with a much larger batch size. This is done with an all-reduce operation, which sums the gradients across ranks and distributes the result back to all of them. I honestly do not know what the "standard" precision for this all-reduce is, but TorchTitan <span class="cite" value="Liang24"></span> defaults to float32 here, which leads me to think it is probably the safer choice.
+            </p>
+
+            <p>
+                However, there is one accumulator that is not usually stored in full precision: the residual stream <span class="cite" value="Elhage21"></span>. The residual stream accumulates the contribution of every attention layer and every feed-forward layer as information flows through the network. On very large models with 70 or more layers, this amounts to 140 accumulations, and these may happen in bfloat16 in the common case, or even in float8 <span class="cite" value="Micikevicius22"></span> or NVFP4 <span class="cite" value="Nvidia25"></span> in more extreme cases. The residual stream is also the path along which gradients propagate backward, so it is fair to expect it might have a meaningful impact on training.
+            </p>
+
+            <p>
+            Let's start by getting a sense of what it means to have a bfloat16 residual stream compared to a full-precision one (this is <a href="https://huggingface.co/PleIAs/Baguettotron">Baguettotron</a>, by the way). In the following two figures I tracked two metrics across layers: 1) the maximum absolute error (left), and 2) the number of sign flips (right). Here, the ground truth is a full-precision model, compared against a bfloat16 model with (orange) or without (blue) a full-precision residual stream.
+            </p>
+
+            <p>
+            Let's focus on the stream's activations (left). For both models, as one would expect, the error grows with depth. However, the fp32 stream's error remains much smaller when compared to the bf16 stream. The same goes if one compares the number of sign flips (right). 
+            </p>
+
+            <img src="figs/hidden_state_error-light.svg" alt="Hidden state error" style="width: 100%;">
+
+            <p>
+            Now let's look at what happens to the gradients of the parameters. The maximum absolute error is much smaller here, since gradients are generally smaller in magnitude. Still, the full-precision residual stream is consistently a bit better. If we look at the number of sign flips instead, the difference is far more stark: the full-precision residual stream has roughly half as many sign flips as the bfloat16 baseline.
+            </p>
+
+            <img src="figs/gradient_error-light.svg" alt="Gradient error" style="width: 100%;">
+
+            <p>
+            This is a bit of evidence that quantizing the residual stream does affect training dynamics somewhat. That doesn't necessarily mean it is a problem, but it does seem worth investigating further.
+            </p>
+
+            <h1> Found Accumulator </h1>
+
+            <p>
+            If quantizing the residual stream to bfloat16 is a problem, then we can design a simple experiment to test this hypothesis. Let's start from a reference transformer block (Llama 3 <span class="cite" value="Grattafiori24"></span>):
+            </p>
+
+            <pre><code class="language-python">
+def forward(self, hidden_states, attention_masks, positions):
+    hidden_states = hidden_states + self.attention(
+        self.attention_norm(hidden_states),
+        attention_masks,
+        positions
+    )
+
+    hidden_states = hidden_states + self.feed_forward(
+        self.ffn_norm(hidden_states)
+    )
+
+    return hidden_states
+            </code></pre>
+
+            <p>
+            Here the activations flow through the block in whatever dtype they start in. Quantizing them to bfloat16 right before each layer is easy: it's just a matter of <code class="language-python">.to(torch.bfloat16)</code>. The same goes for casting the output back to full precision right before it gets folded into the residual stream:
+            </p>
+
+            <pre><code class="language-python">
+def forward(self, hidden_states, attention_masks, positions):
+    hidden_states = hidden_states + self.attention(
+        self.attention_norm(hidden_states).to(torch.bfloat16),
+        attention_masks,
+        positions
+    ).to(torch.float32)
+
+    hidden_states = hidden_states + self.feed_forward(
+        self.ffn_norm(hidden_states).to(torch.bfloat16)
+    ).to(torch.float32)
+
+    return hidden_states
+            </code></pre>
+
+            <p>
+            I should mention that this code is only illustrative; the actual implementation also casts right after the input embedding layer and right before the output embedding layer, but otherwise this is exactly what I used. I'll call this the StreamBack block, since it casts the activations back to full precision before streaming them back into the residual stream. The full implementation is available in the <a href="https://github.com/f14-bertolotti/streamback">streamback</a> repo.
+            </p>
+
+            <p>
+            I expected the StreamBack block to be more stable than the baseline architecture in general, and especially so for deeper models, where the residual stream accumulates many more contributions. To test this, I designed three Llama 3 1B variants with different depth/width trade-offs:
+            </p>
+
+            <ul>
+                <li> Skinny-Tall Llama 3: 80 layers, 1024 hidden dimension, 16 attention heads, 4 KV heads. </li>
+                <li> Medium-Medium Llama 3: 40 layers, 1512 hidden dimension, 16 attention heads, 4 KV heads. </li>
+                <li> Fat-Short Llama 3: 20 layers, 2048 hidden dimension, 16 attention heads, 4 KV heads. </li>
+            </ul>
+
+            <p>
+            All models were trained on 100B tokens from <a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb</a> <span class="cite" value="Penedo24"></span> with an effective batch size of 500K tokens.
+            </p>
+
+            <p>
+            To keep the comparison simple, I used a standard training recipe: AdamW <span class="cite" value="Loshchilov19"></span> with a weight decay of 0.1 and a learning rate of 4e-4. The learning rate schedule follows WSD <span class="cite" value="Hu24"></span>, with 2,500 warmup steps followed by 2,500 steps of cosine decay to zero.
+            </p>
+
+            <p>
+            Overall, this gives 6 models to train: for each Llama 3 variant, one with the baseline block and one with the StreamBack block:
+            </p>
+
+            <ul>
+                <li> Skinny-Tall-Baseline Llama 3 </li>
+                <li> Medium-Medium-Baseline Llama 3 </li>
+                <li> Fat-Short-Baseline Llama 3 </li>
+                <li> Skinny-Tall-StreamBack Llama 3 </li>
+                <li> Medium-Medium-StreamBack Llama 3 </li>
+                <li> Fat-Short-StreamBack Llama 3 </li>
+            </ul>
+
+        <h2> Results </h2>
+
+        <p>
+        Let's keep this post short and jump right to the results.
+        </p>
+
+        <img src="figs/eval-light.svg" alt="Gradient error" style="width: 100%;">
+
+        <p>
+        Unfortunately, there is not much to see here; the two variants behave very similarly. The only real difference is on Winogrande <span class="cite" value="Sakaguchi19"></span>, where the StreamBack model performs noticeably better on the fat-short variant. Apart from this one benchmark, which could well be a fluke, the two models track each other closely. Despite my expectation that the StreamBack model would come out a little ahead, this is actually good news: it means we can safely quantize the residual stream to bfloat16, at least at this scale, without any meaningful impact on downstream benchmark quality.
+        </p>
+
+        <p>
+        The next thing I expected to see is a residual stream with a different envelope (maximums and minimums). This is because a full-precision stream would be able to accumulate the small contribution of each layer, even when that contribution lands on top of a large activation. With a bfloat16 stream, this contribution would be quantized to zero on large activations, impacting gradients. Let's see if this is the case:
+        </p>
+
+        <img src="figs/spread-light.svg" alt="Gradient error" style="width: 100%;">
+
+        <p>
+        Once again, this is not the case. Both the fat-short and medium-medium variants have very similar reach. Interestingly, they start very large and then decrease quite a bit, though the reach remains fairly large at +500 and -500. The skinny-tall model is the outlier here, because something interesting is happening: the baseline variant behaves consistently with the other models, but the StreamBack variant does something odd. It starts with a large reach, the positive side is consistent with the other models, but the negative side collapses to a much smaller reach. I don't know whether this is caused by having a full-precision residual stream, or if it is just noise from training.
+        </p>
+
+        <p>
+        Let's also look at the loss difference between the two variants. Here I am plotting the difference between the baseline and StreamBack loss. A positive value means the StreamBack variant is performing better, a negative value means the baseline variant is performing better. On top we have the training loss, on the bottom the validation loss.
+        </p>
+
+        <img src="figs/loss_difference-light.svg" alt="Gradient error" style="width: 100%;">
+
+        <p>
+        Once again, both variants perform very similarly. The difference is always bounded between -0.001 and 0.001, essentially tracing each other. The training loss for the StreamBack model is consistently a tiny bit better than the baseline, but this doesn't show up in the validation loss at all. At the end of the day, this is one more piece of evidence that a bfloat16 residual stream is robust enough to avoid any training instabilities that matter for downstream performance.
+        </p>
+
+        <h1> A Note on Efficiency </h1>
+
+        <p>
+        Keeping stream activations in float32 takes up a substantial amount of memory. As a matter of fact, and not too surprisingly, it costs double compared to keeping them in bfloat16. If you train LLMs, I am sure you've looked into ways to reduce the memory impact of activations, so this is definitely no good.
+        </p>
+
+        <p>
+        Luckily, the residual stream has a very convenient property: it is purely additive. A block never rewrites the stream, it only <em>adds</em> two contributions to it, the attention delta and the feed-forward delta. If I have the block hand these deltas back explicitly, the structure becomes obvious:
+        </p>
+
+        <pre><code class="language-python">
+def forward(self, hidden_states, attention_masks, positions=None):
+    hidden_states = hidden_states + (delta0 := self.attention(
+        self.attention_norm(hidden_states).to(torch.bfloat16),
+        attention_masks,
+        positions
+    ))
+
+    hidden_states = hidden_states + (delta1 := self.feed_forward(
+        self.ffn_norm(hidden_states).to(torch.bfloat16)
+    ))
+
+    return hidden_states, delta0, delta1
+        </code></pre>
+
+        <p>
+        So a layer is just h<sub>i+1</sub> = h<sub>i</sub> + &Delta;0<sub>i</sub> + &Delta;1<sub>i</sub>. And if a layer only adds to the stream, then we can walk it backwards just as easily by subtracting: h<sub>i</sub> = h<sub>i+1</sub> &minus; &Delta;0<sub>i</sub> &minus; &Delta;1<sub>i</sub>. This means we do not actually need to keep every intermediate residual around for the backward pass. If we hold on to the last residual h<sub>N</sub> and to the per-layer deltas, we can reconstruct every earlier h<sub>i</sub> on the fly, one subtraction at a time.
+        </p>
+
+        <img src="figs/reverse-stream-light.svg" alt="Reconstructing the residual stream by subtracting layer deltas" style="width: 100%;">
+
+        <p>
+        The deltas are the bfloat16 outputs of the sublayers, and the only genuinely full-precision tensor we must stash is the final residual h<sub>N</sub>, the seed of the reconstruction chain. Every intermediate residual is thrown away on the forward pass and rebuilt on the way back.
+        </p>
+
+        <p>
+        Concretely, during the forward pass I register a pointer to each residual and cache the deltas, all inside a <code class="language-python">saved_tensors_hooks</code> context:
+        </p>
+
+        <pre><code class="language-python">
+with torch.autograd.graph.saved_tensors_hooks(stream.pack, stream.unpack):
+    h = self.tok_embeddings(tokens).float()
+    for i, layer in enumerate(self.layers.values()):
+        stream.append(residual=get_pointer(h), layer=i)
+        h, delta0, delta1 = layer(h, attention_masks, positions)
+        stream.append(delta0=delta0, delta1=delta1)
+    stream.append(residual=h)  # seed reconstruction chain with float32 h_N
+        </code></pre>
+
+        <p>
+        The interesting part is <code class="language-python">pack</code>/<code class="language-python">unpack</code>. When autograd is about to save a full-precision residual for the backward pass, <code class="language-python">pack</code> recognizes it (a float32 tensor whose storage pointer we registered) and stores a cheap integer pointer instead, letting the actual fp32 storage be freed. On the way back, <code class="language-python">unpack</code> sees that integer and calls <code class="language-python">pop</code>, which rebuilds the residual by subtracting the deltas from the one it just reconstructed:
+        </p>
+
+        <pre><code class="language-python">
+def pack(self, x):
+    if x.dtype == torch.float32 and get_pointer(x) in self:
+        return get_pointer(x)          # store a pointer, free the fp32 tensor
+    return x
+
+def unpack(self, x):
+    if isinstance(x, int):
+        return self.pop()              # rebuild the residual on the backward pass
+    return x
+
+@torch.no_grad()
+def pop(self):
+    residual = self.residual_stream.pop()
+    delta0 = self.delta0s.pop()
+    delta1 = self.delta1s.pop()
+    self.layers.pop()
+    self.residual_stream[-1] = residual - delta0 - delta1   # h_i = h_{i+1} - d0 - d1
+    return self.residual_stream[-1].requires_grad_(True)
+        </code></pre>
+
+        <p>
+        It is worth being honest about what this actually buys us. Saving the stream in float32 or saving the deltas in bfloat16 amounts to the same memory: one fp32 residual per layer costs exactly as much as its two bf16 deltas (the story only changes for precisions lower than bfloat16, where the deltas get cheaper). What you do get on top is that the saved activations are now distributed across the block, so recomputation for activation checkpointing has intermediate points to start from. That said, all of this does not sit too well with <code class="language-python">torch.compile</code>, so I have not seen much of a performance gain in practice.
+        </p>
+
+        <h1> Future Work </h1>
+
+        <p>
+        These are somewhat negative results, but there are a few ways I think this could be extended to get more insight. Unfortunately, I currently lack either the hardware or the time to test these ideas myself, so here are a couple of possible follow-ups:
+        </p>
+
+        <p>
+        It would be interesting to compare against more aggressive formats such as MXFP8 or NVFP4. We've seen that a bfloat16 residual stream is more than robust enough to avoid training instabilities that matter for downstream performance, but there might still be a measurable gap once we push to these more extreme formats.
+        </p>
+
+        <p>
+        Increasing the token horizon would increase the number of accumulations flowing through the residual stream. This could be a good way to stress-test it further, and see whether it remains robust over longer training runs.
+        </p>
+
+        <h2>Links</h2>
+        <ul>
+            <li><a href="https://github.com/f14-bertolotti/streamback">https://github.com/f14-bertolotti/streamback</a></li>
+        </ul>
+
+        </div>
+
+        <br>
+
+        <div class="bibtex" year="2026" month="July"></div>
+
+        <br>
+
+        <div class="bibliography"></div>
+
+        <div id="footer"></div>
+ 
+        <script src="toggle-theme.js"></script>
+        <script src="../../scripts/load-header.js"></script>
+        <script src="../../scripts/load-footer.js"></script>
+        <script src="../../scripts/load-cits.js"></script>
+        <script src="../../scripts/load-bib.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/prism.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/prism-python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-MML-AM_CHTML"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.js"></script>
+        <script src="animations.js"></script>
+
+    </body>
+
+</html>

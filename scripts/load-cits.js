@@ -24,12 +24,13 @@ function replaceCitations() {
         const bibtex_id = citeElement.getAttribute('value');
         references.push(bibtexToIeee(bibliography[bibtex_id]));
 
-        // Replace the cite element content with [i]
-        citeElement.textContent = `[${index + 1}]`;
-        const citationText = document.createTextNode(`[${index + 1}]`);
+        // Replace the cite element with a clickable link to the bibliography entry
+        const citationLink = document.createElement('a');
+        citationLink.classList.add('cite');
+        citationLink.setAttribute('href', `#ref-${index + 1}`);
+        citationLink.textContent = `[${index + 1}]`;
 
-        // Replace the entire cite element with the text node
-        citeElement.parentNode.replaceChild(citationText, citeElement)
+        citeElement.parentNode.replaceChild(citationLink, citeElement)
     });
 
     // Generate the bibliography list
@@ -38,8 +39,9 @@ function replaceCitations() {
     bibliography_header.textContent = "Bibliography";
 
     listElement.classList.add("bibliography");
-    references.forEach(ref => {
+    references.forEach((ref, index) => {
         const listItem = document.createElement('li');
+        listItem.id = `ref-${index + 1}`;
         listItem.textContent = ref;
         listElement.appendChild(listItem);
     });
@@ -217,5 +219,65 @@ const bibliography = {
         "author"  : "Chao Yu and Akash Velu and Eugene Vinitsky and Jiaxuan Gao and Yu Wang and Alexandre Bayen and Yi Wu",
         "journal" : "Advances in neural information processing systems",
         "year"    : "2022"
+    },
+    "Kalamkar19" : {
+        "title"   : "A Study of BFLOAT16 for Deep Learning Training",
+        "author"  : "Kalamkar, Dhiraj and Mudigere, Dheevatsa and Mellempudi, Naveen and others",
+        "journal" : "arXiv preprint arXiv:1905.12322",
+        "year"    : "2019"
+    },
+    "Liang24" : {
+        "title"   : "TorchTitan: One-stop PyTorch native solution for production ready LLM pre-training",
+        "author"  : "Liang, Wanchao and Liu, Tianyu and Wright, Less and Constable, Will and Gu, Andrew and Huang, Chien-Chin and Zhang, Iris and Feng, Wei and Huang, Howard and Wang, Junjie and Purandare, Sanket and Nadathur, Gokul and Idreos, Stratos",
+        "journal" : "arXiv preprint arXiv:2410.06511",
+        "year"    : "2024"
+    },
+    "Elhage21" : {
+        "title"   : "A Mathematical Framework for Transformer Circuits",
+        "author"  : "Elhage, Nelson and Nanda, Neel and Olsson, Catherine and Henighan, Tom and Joseph, Nicholas and Mann, Ben and others",
+        "journal" : "Transformer Circuits Thread",
+        "year"    : "2021"
+    },
+    "Micikevicius22" : {
+        "title"   : "FP8 Formats for Deep Learning",
+        "author"  : "Micikevicius, Paulius and Stosic, Dusan and others",
+        "journal" : "arXiv preprint arXiv:2209.05433",
+        "year"    : "2022"
+    },
+    "Nvidia25" : {
+        "title"   : "Pretraining Large Language Models with NVFP4",
+        "author"  : "NVIDIA and others",
+        "journal" : "arXiv preprint arXiv:2509.25149",
+        "year"    : "2025"
+    },
+    "Grattafiori24" : {
+        "title"   : "The Llama 3 Herd of Models",
+        "author"  : "Grattafiori, Aaron and Dubey, Abhimanyu and others",
+        "journal" : "arXiv preprint arXiv:2407.21783",
+        "year"    : "2024"
+    },
+    "Penedo24" : {
+        "title"   : "The FineWeb Datasets: Decanting the Web for the Finest Text Data at Scale",
+        "author"  : "Penedo, Guilherme and Kydlicek, Hynek and Ben Allal, Loubna and Lozhkov, Anton and Mitchell, Margaret and Raffel, Colin and Von Werra, Leandro and Wolf, Thomas",
+        "journal" : "Advances in Neural Information Processing Systems",
+        "year"    : "2024"
+    },
+    "Loshchilov19" : {
+        "title"   : "Decoupled Weight Decay Regularization",
+        "author"  : "Loshchilov, Ilya and Hutter, Frank",
+        "journal" : "International Conference on Learning Representations",
+        "year"    : "2019"
+    },
+    "Hu24" : {
+        "title"   : "MiniCPM: Unveiling the Potential of Small Language Models with Scalable Training Strategies",
+        "author"  : "Hu, Shengding and Tu, Yuge and Han, Xu and others",
+        "journal" : "arXiv preprint arXiv:2404.06395",
+        "year"    : "2024"
+    },
+    "Sakaguchi19" : {
+        "title"   : "WinoGrande: An Adversarial Winograd Schema Challenge at Scale",
+        "author"  : "Sakaguchi, Keisuke and Le Bras, Ronan and Bhagavatula, Chandra and Choi, Yejin",
+        "journal" : "arXiv preprint arXiv:1907.10641",
+        "year"    : "2019"
     }
 }
