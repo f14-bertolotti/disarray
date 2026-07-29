@@ -102,7 +102,7 @@ def forward(self, hidden_states, attention_masks, positions):
             </code></pre>
 
             <p>
-            I should mention that this code is only illustrative; the actual implementation also casts right after the input embedding layer and right before the output embedding layer, but otherwise this is exactly what I used. I'll call this the StreamBack block, since it casts the activations back to full precision before streaming them back into the residual stream.
+            I should mention that this code is only illustrative; the actual implementation also casts right after the input embedding layer and right before the output embedding layer, but otherwise this is exactly what I used. I'll call this the StreamBack block, since it casts the activations back to full precision before streaming them back into the residual stream. The full implementation is available in the <a href="https://github.com/f14-bertolotti/streamback">streamback</a> repo.
             </p>
 
             <p>
@@ -259,6 +259,11 @@ def pop(self):
         <p>
         Increasing the token horizon would increase the number of accumulations flowing through the residual stream. This could be a good way to stress-test it further, and see whether it remains robust over longer training runs.
         </p>
+
+        <h2>Links</h2>
+        <ul>
+            <li><a href="https://github.com/f14-bertolotti/streamback">https://github.com/f14-bertolotti/streamback</a></li>
+        </ul>
 
         </div>
 

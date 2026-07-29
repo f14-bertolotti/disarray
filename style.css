@@ -2,13 +2,13 @@
     --background-color : rgb(250 , 250 , 250 );
     --header-color     : rgb(0   , 0   , 0   );
     --text-color       : rgb(70  , 70  , 70  );
-    --cite-color       : rgb(70  , 70  , 70  );
     --biblio-color     : rgb(70  , 70  , 70  );
     --post-bg-color    : rgb(200 , 200 , 200 );
     --post-desc-color  : rgb(70  , 70  , 70  );
     --post-foot-color  : rgb(110 , 110 , 110 );
     --post-title-color : rgb(0   , 0   , 0   );
     --table-back-color : rgb(250 , 250 , 250 );
+    --link-color       : rgb(0   , 100 , 220 );
     --text-font-size   : 16px;
 
     --code-text-color        : rgb(0   , 0   , 0   );
@@ -26,13 +26,13 @@ body.dark-mode {
     --background-color : rgb(40  , 40  , 40  );
     --header-color     : rgb(255 , 255 , 255 );
     --text-color       : rgb(190 , 190 , 190 );
-    --cite-color       : rgb(190 , 190 , 190 );
     --biblio-color     : rgb(190 , 190 , 190 );
     --post-bg-color    : rgb(70  , 70  , 70  );
     --post-desc-color  : rgb(200 , 200 , 200 );
     --post-foot-color  : rgb(150 , 150 , 150 );
     --post-title-color : rgb(255 , 255 , 255 );
     --table-back-color : rgb(40  , 40  , 40  );
+    --link-color       : rgb(90  , 170 , 255 );
     --text-font-size   : 16px;
 
     --code-text-color        : rgb(255 , 255 , 255 );
@@ -97,7 +97,8 @@ html body {
 }
 
 .cite {
-    color : var(--cite-color);
+    color : var(--link-color);
+    text-decoration: none;
     display: inline-block;
 }
 
@@ -156,7 +157,8 @@ ol {
 }
 
 a {
-    color:inherit;
+    color: var(--link-color);
+    text-decoration: none;
 }
 
 table {
